@@ -155,6 +155,51 @@ static void load_custom_broadcasts(const std::string &base_path, std::set<IP_POR
     }
 }
 
+// net_override.txt (isaac-lan patch)
+// Forces the tcp port announced to peers and the address used when connecting back.
+// Absent file / empty values => original behaviour.
+static void load_net_override(const std::string &base_path, Settings *settings)
+{
+    if (!settings) return;
+
+    const std::string filepath(base_path + "net_override.txt");
+    std::ifstream file(std::filesystem::u8path(filepath));
+    if (!file.is_open()) return;
+
+    common_helpers::consume_bom(file);
+    PRINT_DEBUG("loading net override file '%s'", filepath.c_str());
+
+    std::string line{};
+    while (std::getline(file, line)) {
+        auto pos = line.find('=');
+        if (pos == std::string::npos) continue;
+
+        std::string key = line.substr(0, pos);
+        std::string val = line.substr(pos + 1);
+
+        auto trim = [](std::string &s) {
+            auto first = s.find_first_not_of(" \t\r\n");
+            auto last = s.find_last_not_of(" \t\r\n");
+            if (first == std::string::npos) { s.clear(); return; }
+            s = s.substr(first, last - first + 1);
+        };
+        trim(key);
+        trim(val);
+        if (key.empty() || val.empty()) continue;
+
+        if (key == "tcp_port") {
+            settings->forced_tcp_port = (uint16_t)std::atoi(val.c_str());
+            PRINT_DEBUG("net override: tcp_port=%u", settings->forced_tcp_port);
+        } else if (key == "tcp_ip") {
+            std::set<IP_PORT> ips = Networking::resolve_ip(val + ":1");
+            if (!ips.empty()) {
+                settings->forced_tcp_ip = ips.begin()->ip;
+                PRINT_DEBUG("net override: tcp_ip=%s", val.c_str());
+            }
+        }
+    }
+}
+
 // subscribed_groups_clans.txt
 static void load_subscribed_groups_clans(const std::string &base_path, Settings *settings_client, Settings *settings_server)
 {
@@ -2195,6 +2240,9 @@ uint32 create_localstorage_settings(Settings **settings_client_out, Settings **s
     // broadcasts list
     settings_client->custom_broadcasts = custom_broadcasts;
     settings_server->custom_broadcasts = custom_broadcasts;
+    // network override (isaac-lan patch)
+    load_net_override(local_storage->get_global_settings_path(), settings_client);
+    load_net_override(steam_settings_path, settings_client);
     // overlay warning for local save
     settings_client->overlay_warn_local_save = local_save;
     settings_server->overlay_warn_local_save = local_save;

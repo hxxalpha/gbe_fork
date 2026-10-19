@@ -264,6 +264,13 @@ public:
     //custom broadcasts
     std::set<IP_PORT> custom_broadcasts{};
 
+    // network override (isaac-lan patch)
+    // force the tcp port announced to peers, and the port used when connecting back.
+    // 0 = keep the original behaviour (use the real listening port).
+    uint16_t forced_tcp_port = 0;
+    // force the ip used when connecting back, host byte order. 0 = use the packet source ip.
+    uint32_t forced_tcp_ip = 0;
+
     //networking
     bool disable_networking = false;
 

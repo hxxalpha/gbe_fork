@@ -662,6 +662,18 @@ bool Networking::handle_announce(Common_Message *msg, IP_PORT ip_port)
     PRINT_DEBUG("Handle Announce: %u, " "%" PRIu64 ", %u, %u", conn->appid, msg->source_id(), msg->announce().appid(), msg->announce().type());
     conn->tcp_ip_port = ip_port;
     conn->tcp_ip_port.port = htons(msg->announce().tcp_port());
+    // isaac-lan patch: allow overriding the address/port used to connect back.
+    // Used when the peer is reached through a relay, where the packet source
+    // address is the local relay rather than the peer itself.
+    {
+        Steam_Client *client = get_steam_client();
+        if (client && client->settings_client) {
+            uint16_t back_port = client->settings_client->forced_tcp_port;
+            uint32_t back_ip = client->settings_client->forced_tcp_ip;
+            if (back_port) conn->tcp_ip_port.port = htons(back_port);
+            if (back_ip) conn->tcp_ip_port.ip = htonl(back_ip);
+        }
+    }
     conn->appid = msg->announce().appid();
 
     for (int i = 0; i < msg->announce().ids_size(); ++i) {
@@ -878,7 +890,16 @@ Common_Message Networking::create_announce(bool request)
         }
     }
 
-    announce->set_tcp_port(tcp_port);
+    // isaac-lan patch: announce the forced tcp port when configured, so both
+    // sides agree on the port the relay is listening on.
+    {
+        uint16_t announce_port = tcp_port;
+        Steam_Client *client = get_steam_client();
+        if (client && client->settings_client && client->settings_client->forced_tcp_port) {
+            announce_port = client->settings_client->forced_tcp_port;
+        }
+        announce->set_tcp_port(announce_port);
+    }
     announce->set_appid(this->appid);
     for (auto &id : ids) announce->add_ids(id.ConvertToUint64());
     Common_Message msg;
