@@ -450,6 +450,8 @@ static bool recv_tcp(struct TCP_Socket &socket)
         socket.recv_buffer.resize(old_size + size);
         if (size > 0) {
             len = recv(socket.sock, &(socket.recv_buffer[old_size]), size, MSG_NOSIGNAL);
+            // keep only what was actually read, a short read would otherwise leave garbage in the stream
+            socket.recv_buffer.resize(old_size + (len > 0 ? len : 0));
             socket.received_data = true;
             return true;
         }
@@ -511,6 +513,7 @@ std::set<IP_PORT> Networking::resolve_ip(std::string dns)
 
 void Networking::do_callbacks_message(Common_Message *msg)
 {
+    ++rx_messages;
     if (msg->has_network() || msg->has_network_old()) {
         PRINT_DEBUG("has_network");
         run_callbacks(CALLBACK_ID_NETWORKING, msg);
@@ -978,6 +981,7 @@ void Networking::Run()
                 } else {
                     msg.set_source_ip(ntohl(ip_port.ip));
                     msg.set_source_port(ntohs(ip_port.port));
+                    ++recv_udp;
                     do_callbacks_message(&msg);
                 }
             }
@@ -1159,6 +1163,21 @@ void Networking::Run()
     reset_last_error();
 }
 
+void Networking::get_rx_sockets(std::vector<sock_t> &out)
+{
+    if (!enabled) return;
+
+    auto add = [&out](sock_t s) { if (is_socket_valid(s)) out.push_back(s); };
+    add(udp_socket);
+    add(tcp_socket);
+    if (query_alive) add(query_socket);
+    for (auto &s : accepted) add(s.sock);
+    for (auto &conn : connections) {
+        add(conn.tcp_socket_outgoing.sock);
+        add(conn.tcp_socket_incoming.sock);
+    }
+}
+
 void Networking::addListenId(CSteamID id)
 {
     if (!enabled) return;
@@ -1247,11 +1266,13 @@ bool Networking::sendTo(Common_Message *msg, bool reliable, Connection *conn)
                 send_buffer_tcp(conn->tcp_socket_outgoing, msg);
                 ret = true;
             }
+            if (ret) ++sent_tcp;
         } else {
             std::vector<char> buffer(size, 0);
             msg->SerializeToArray(&buffer[0], static_cast<int>(size));
             send_packet_to(udp_socket, conn->udp_ip_port, &buffer[0], static_cast<unsigned long>(size));
             ret = true;
+            ++sent_udp;
         }
     }
 

@@ -66,6 +66,96 @@ void Steam_Client::background_thread_proc()
     }
 }
 
+void Steam_Client::rx_thread_proc()
+{
+    std::vector<sock_t> socks{};
+    while (!rx_thread_stop) {
+        {
+            std::lock_guard lock(global_mutex);
+            socks.clear();
+            network->get_rx_sockets(socks);
+        }
+
+        if (socks.empty()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+
+        fd_set readable;
+        FD_ZERO(&readable);
+        sock_t max_sock = 0;
+        for (auto s : socks) {
+#if !defined(STEAM_WIN32)
+            if (s >= FD_SETSIZE) continue;
+#endif
+            FD_SET(s, &readable);
+            if (s > max_sock) max_sock = s;
+        }
+
+        // short timeout so the socket list stays fresh and stop requests are noticed
+        timeval timeout{ 0, 20 * 1000 };
+        int ready = select(static_cast<int>(max_sock) + 1, &readable, nullptr, nullptr, &timeout);
+        if (ready == 0) continue;
+        if (ready < 0) {
+            // a socket was closed under us, the next iteration takes a fresh list
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            continue;
+        }
+
+        uint64 consumed = 0;
+        {
+            std::lock_guard lock(global_mutex);
+            uint64 before = network->rx_messages;
+            network->Run();
+            consumed = network->rx_messages - before;
+            // hand the new messages over to the interfaces' receive queues right away,
+            // that step normally also waits for the game's RunCallbacks()
+            if (consumed) run_every_runcb->run();
+            ++stats_rx_wakeups;
+        }
+
+        // readable but nothing consumed, e.g. a peer closed its tcp socket and the emu
+        // never reads the EOF; back off instead of spinning on the lock
+        if (!consumed) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+void Steam_Client::start_rx_thread()
+{
+    if (!settings_client->net_rx_thread || rx_thread.joinable()) return;
+
+    PRINT_DEBUG("started rx thread");
+    rx_thread_stop = false;
+    rx_thread = std::thread([this]{ rx_thread_proc(); });
+}
+
+void Steam_Client::stop_rx_thread()
+{
+    if (!rx_thread.joinable()) return;
+
+    rx_thread_stop = true;
+    rx_thread.join();
+    PRINT_DEBUG("stopped rx thread");
+}
+
+void Steam_Client::write_net_stats(unsigned long long now_ms)
+{
+    std::ofstream file(std::filesystem::u8path(settings_client->net_stats_path), std::ios::app);
+    if (!file.is_open()) return;
+
+    auto secs = (now_ms - stats_last_write) / 1000.0;
+    file << "t=" << now_ms
+         << " cb_runs/s=" << (stats_cb_runs / secs)
+         << " cb_gap_max_ms=" << stats_cb_gap_max
+         << " rx_wakeups/s=" << (stats_rx_wakeups / secs)
+         << " rx_msgs=" << network->rx_messages
+         << " recv_udp=" << network->recv_udp
+         << " sent_udp=" << network->sent_udp
+         << " sent_tcp=" << network->sent_tcp
+         << " rx_thread=" << (int)rx_thread.joinable()
+         << "\n";
+}
+
 Steam_Client::Steam_Client()
 {
     PRINT_DEBUG("start ----------");
@@ -200,7 +290,8 @@ Steam_Client::~Steam_Client()
 {
     #define DEL_INST(_obj_ins) do if (_obj_ins) { delete _obj_ins; _obj_ins = nullptr; } while(0)
 
-    // background thread first to avoid unwanted racing
+    // background threads first to avoid unwanted racing
+    stop_rx_thread();
     DEL_INST(background_thread);
 
     // ----------------------------------
@@ -388,6 +479,7 @@ HSteamUser Steam_Client::ConnectToGlobalUser( HSteamPipe hSteamPipe )
         // hence we spawn the background thread here which trigger all run_callbacks() and run networking callbacks
         PRINT_DEBUG("started background thread");
         background_thread->start(this);
+        start_rx_thread();
 
         steam_overlay->SetupOverlay();
     }
@@ -498,6 +590,7 @@ bool Steam_Client::BShutdownIfAllPipesClosed()
     if (steam_pipes.size()) return false; // not all pipes are released via BReleaseSteamPipe() yet
     
     PRINT_DEBUG("killing background thread...");
+    stop_rx_thread();
     background_thread->kill();
     PRINT_DEBUG("killed background thread");
 
@@ -1059,7 +1152,19 @@ void Steam_Client::RunCallbacks(bool runClientCB, bool runGameserverCB)
     // PRINT_DEBUG("callbacks_client *********");
     callbacks_client->runCallBacks();
 
-    last_cb_run = (unsigned long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    auto now_ms = (unsigned long long)std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (settings_client->net_stats) {
+        if (!stats_last_write) stats_last_write = now_ms;
+        if (last_cb_run && now_ms - last_cb_run > stats_cb_gap_max) stats_cb_gap_max = now_ms - last_cb_run;
+        ++stats_cb_runs;
+        if (now_ms - stats_last_write >= 5000) {
+            write_net_stats(now_ms);
+            stats_last_write = now_ms;
+            stats_cb_runs = stats_cb_gap_max = stats_rx_wakeups = 0;
+        }
+    }
+
+    last_cb_run = now_ms;
     cb_run_active = false;
     PRINT_DEBUG("done ******************************************************");
 }

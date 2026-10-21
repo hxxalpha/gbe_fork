@@ -196,6 +196,13 @@ static void load_net_override(const std::string &base_path, Settings *settings)
                 settings->forced_tcp_ip = ips.begin()->ip;
                 PRINT_DEBUG("net override: tcp_ip=%s", val.c_str());
             }
+        } else if (key == "rx_thread") {
+            settings->net_rx_thread = val == "1";
+            PRINT_DEBUG("net override: rx_thread=%i", (int)settings->net_rx_thread);
+        } else if (key == "stats") {
+            settings->net_stats = val == "1";
+            if (settings->net_stats) settings->net_stats_path = base_path + "net_stats.log";
+            PRINT_DEBUG("net override: stats=%i", (int)settings->net_stats);
         }
     }
 }

@@ -122,6 +122,17 @@ private:
     common_helpers::KillableWorker *background_thread{};
     void background_thread_proc();
 
+    // net_override.txt rx_thread=1: wait on the sockets and pump the network as soon as data arrives
+    std::thread rx_thread{};
+    std::atomic_bool rx_thread_stop = false;
+    void rx_thread_proc();
+    void start_rx_thread();
+    void stop_rx_thread();
+
+    // net_override.txt stats=1
+    unsigned long long stats_last_write = 0, stats_cb_runs = 0, stats_cb_gap_max = 0, stats_rx_wakeups = 0;
+    void write_net_stats(unsigned long long now_ms);
+
     std::map<CCallbackBase *, CCallBackWrapper> old_callbacks_map;
 
 public:

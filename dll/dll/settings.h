@@ -270,6 +270,12 @@ public:
     uint16_t forced_tcp_port = 0;
     // force the ip used when connecting back, host byte order. 0 = use the packet source ip.
     uint32_t forced_tcp_ip = 0;
+    // pump the network on a dedicated thread as soon as data arrives,
+    // instead of waiting for the game's next SteamAPI_RunCallbacks()
+    bool net_rx_thread = false;
+    // periodically append traffic/callback cadence stats to <steam_settings>/net_stats.log
+    bool net_stats = false;
+    std::string net_stats_path{};
 
     //networking
     bool disable_networking = false;

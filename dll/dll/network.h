@@ -19,6 +19,7 @@
 #define NETWORK_INCLUDE
 
 #include "base.h"
+#include <atomic>
 #include <curl/curl.h>
 
 #define DEFAULT_PORT 47584
@@ -144,6 +145,12 @@ public:
     void addListenId(CSteamID id);
     void setAppID(uint32 appid);
     void Run();
+
+    // sockets that may have incoming data, so a dedicated thread can wait on them
+    void get_rx_sockets(std::vector<sock_t> &out);
+
+    // traffic counters (messages, not bytes)
+    std::atomic<uint64> rx_messages{}, recv_udp{}, sent_udp{}, sent_tcp{};
 
     // send to a specific user, set_dest_id() must be called
     bool sendTo(Common_Message *msg, bool reliable, Connection *conn = NULL);
